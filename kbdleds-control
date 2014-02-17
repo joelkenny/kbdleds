@@ -1,0 +1,47 @@
+#! /bin/sh
+
+# Written by Miquel van Smoorenburg <miquels@drinkel.ow.org>.
+# Modified for Debian GNU/Linux by Ian Murdock <imurdock@gnu.ai.mit.edu>.
+# Modified for exim by Tim Cutts <timc@chiark.greenend.org.uk>
+# Modified for kbdleds by Joel Kenny.
+
+
+#Uncomment and edit the following line before using this script
+#PATTERN="-s7 -w500 -s0 -w500"
+
+DAEMON=/usr/bin/kbdleds
+NAME=kbdleds
+
+if ! test -x $DAEMON
+then
+	echo "You must install kbdleds before using this script!"
+	exit 1
+fi
+
+if [ "$PATTERN" = "" ]
+then
+	echo "You must edit this script before using it!"
+	exit 1
+fi
+
+case "$1" in
+  start)
+    echo "Starting $NAME: "
+    /sbin/start-stop-daemon --start --exec $DAEMON -- -D $PATTERN
+    ;;
+  stop)
+    echo "Stopping $NAME: "
+    /sbin/start-stop-daemon --stop --oknodo --retry 30 --exec $DAEMON
+      ;;
+  restart)
+    /sbin/start-stop-daemon --stop --oknodo --retry 30 --exec $DAEMON
+    /sbin/start-stop-daemon --start --exec $DAEMON -- -D $PATTERN
+    echo "Restarting $NAME: "
+    ;;
+  *)
+    echo "Usage: /etc/init.d/$NAME {start|stop|restart}"
+    exit 1
+    ;;
+esac
+
+exit 0

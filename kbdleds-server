@@ -1,0 +1,107 @@
+#!/usr/bin/perl -Tw
+
+#Copyright 2003 Joel Kenny
+#
+#This file is part of kbdleds.
+#
+#kbdleds is free software; you can redistribute it and/or modify
+#it under the terms of the GNU General Public License as published by
+#the Free Software Foundation; either version 2 of the License, or
+#(at your option) any later version.
+#
+#kbdleds is distributed in the hope that it will be useful,
+#but WITHOUT ANY WARRANTY; without even the implied warranty of
+#MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#GNU General Public License for more details.
+#
+#You should have received a copy of the GNU General Public License
+#along with kbdleds; if not, write to the Free Software
+#Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+
+use strict;
+BEGIN { $ENV{PATH} = '/usr/ucb:/bin' }
+use Socket;
+use Carp;
+
+sub spawn;  # forward declaration
+sub logmsg { warn "$0 $$: @_ at ", scalar localtime, "\n" }
+
+my $okchars = " -aghosvx0123456789"; # these chars are allowed to be sent to kbdleds on the command line
+
+my $port = shift || 2550;
+my $proto = getprotobyname('tcp');
+$port = $1 if $port =~ /(\d+)/; # untaint port number
+
+socket(Server, PF_INET, SOCK_STREAM, $proto) || die "socket: $!";
+setsockopt(Server, SOL_SOCKET, SO_REUSEADDR,pack("l", 1)) || die "setsockopt: $!";
+bind(Server, sockaddr_in($port, INADDR_ANY)) || die "bind: $!";
+listen(Server,SOMAXCONN) || die "listen: $!";
+
+logmsg "server started on port $port";
+
+my $waitedpid = 0;
+my $paddr;
+
+sub REAPER {
+	$waitedpid = wait;
+	$SIG{CHLD} = \&REAPER;  # loathe sysV
+	logmsg "reaped $waitedpid" . ($? ? " with exit $?" : '');
+}
+
+$SIG{CHLD} = \&REAPER;
+
+for ( $waitedpid = 0;
+	($paddr = accept(Client,Server)) || $waitedpid;
+	$waitedpid = 0, close Client)
+{
+	next if $waitedpid and not $paddr;
+	my($port,$iaddr) = sockaddr_in($paddr);
+	my $name = gethostbyaddr($iaddr,AF_INET);
+
+	logmsg "connection from $name [",inet_ntoa($iaddr), "]at port $port";
+
+	spawn sub {
+		my $cmdline = readline *STDIN;
+		if( !defined($cmdline)){
+			exit 0;
+		}
+		for( my $j = 0; $j < 2 && length( $cmdline ) > 0 ; $j++ ){
+			my $lastchar = substr( $cmdline,length($cmdline)-1,1 );
+			if( $lastchar =~ '\015' || $lastchar =~ '\012' ){
+				chop $cmdline;
+			}
+			$lastchar = substr( $cmdline,length($cmdline)-1,1 );
+		}
+		for( my $i = 0; $i < length( $cmdline ); $i++ ){
+			if( index($okchars, substr($cmdline,$i,1) ) == -1 ){
+				print "Bad character(s) in request.\015\012";
+				logmsg "Bad request from $name [",inet_ntoa($iaddr), "]at port $port:\'$cmdline\'";
+				exit 1;
+			}
+		}
+		exec "/usr/bin/kbdleds",$cmdline # 'wrong' line terminators
+		or confess "can't exec kbdleds: $!";
+	};
+}
+
+sub spawn {
+	my $coderef = shift;
+
+	unless (@_ == 0 && $coderef && ref($coderef) eq 'CODE') {
+		confess "usage: spawn CODEREF";
+	}
+
+	my $pid;
+	if (!defined($pid = fork)) {
+		logmsg "cannot fork: $!";
+		return;
+	} elsif ($pid) {
+		logmsg "begat $pid";
+		return; # I'm the parent
+	}
+	# else I'm the child -- go spawn
+	open(STDIN,  "<&Client")   || die "can't dup client to stdin";
+	open(STDOUT, ">&Client")   || die "can't dup client to stdout";
+	## open(STDERR, ">&STDOUT") || die "can't dup stdout to stderr";
+	exit &$coderef();
+}
